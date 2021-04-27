@@ -39,7 +39,6 @@ def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False)
 
         r.y0 = blocks[0][1] - h*0.005
         r.y1 = max(b[3] for b in blocks) + h*0.007
-        print(blocks, r.y1 - r.y0, r.height)
 
         if landscape:
             w, h = h, w
