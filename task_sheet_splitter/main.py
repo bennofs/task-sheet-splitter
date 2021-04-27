@@ -6,6 +6,7 @@ import fitz
 
 
 FMT_REGEX = re.compile("^Exercise [0-9]+\n$|^Aufgabe [0-9]+\n$")
+PAGE_NUMBER_REGEX = re.compile(r'^\s*[0-9]*\s*$')
 def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False):
     page = src[page_idx]
     blocks = sorted([b for b in page.get_text_blocks() if block_re.match(b[4])], key=lambda b: b[1])
@@ -21,10 +22,29 @@ def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False)
     xref = 0
     for r in rects:
         w, h = page.rect.width, page.rect.height
+        r = fitz.Rect(*r)
+
+        # crop
+        blocks = []
+        last_y = None
+        for block in sorted(page.get_text('blocks', clip=r), key=lambda block: block[1]):
+            if last_y and (block[1] - last_y) / h > 0.05 and PAGE_NUMBER_REGEX.match(block[4]):
+                continue
+            if not block[4]:
+                continue
+            blocks.append(block)
+
+        if sum(len(b[4]) for b in blocks) < 10:
+            continue
+
+        r.y0 = blocks[0][1] - h*0.005
+        r.y1 = max(b[3] for b in blocks) + h*0.007
+        print(blocks, r.y1 - r.y0, r.height)
+
         if landscape:
             w, h = h, w
+
         new_page = result.new_page(-1, w, h)
-        r = fitz.Rect(*r)
         r += fitz.Rect(page.CropBoxPosition, page.CropBoxPosition)
 
         shift = w/2 - r.width/2
@@ -57,7 +77,8 @@ def main():
 
     p = fitz.Document(args.src)
     result = fitz.Document()
-    split_at_block(result, p, 0, FMT_REGEX, landscape=args.landscape, grid=args.grid)
+    for i in range(p.page_count):
+        split_at_block(result, p, i, FMT_REGEX, landscape=args.landscape, grid=args.grid)
     result.save(args.dst, garbage=4)
 
 if __name__ == '__main__':
