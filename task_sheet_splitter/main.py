@@ -32,6 +32,7 @@ def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False)
                 continue
             if not block[4]:
                 continue
+            last_y = block[1]
             blocks.append(block)
 
         if sum(len(b[4]) for b in blocks) < 10:
