@@ -1,34 +1,49 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import sys
 import re
+from typing import Iterable, List, Optional
 import fitz
 
 
-FMT_REGEX = re.compile("^Exercise [0-9]+\n$|^Aufgabe [0-9]+\n$")
-PAGE_NUMBER_REGEX = re.compile(r'^\s*[0-9]*\s*$')
-def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False):
-    page = src[page_idx]
-    blocks = sorted([b for b in page.get_text_blocks() if block_re.match(b[4])], key=lambda b: b[1])
-    prev = page.rect[1]
-    rects = []
-    for b in blocks:
-        margin = 0.2 * abs(b[3] - b[1])
-        upper = max(b[1] - margin, page.rect[1])
-        r = (page.rect[0], prev, page.rect[2], upper)
-        prev = upper
-        rects.append(r)
-    rects.append((page.rect[0], prev, page.rect[2], page.rect[3]))
-    xref = 0
-    for r in rects:
-        w, h = page.rect.width, page.rect.height
-        r = fitz.Rect(*r)
 
-        # crop
+PAGE_NUMBER_REGEX = re.compile(r'^(Page|Seite)?\s*[0-9](\s*(of|von)\s*[0-9]*)?\s*$')
+class TaskPart:
+    """A task part is a slice of a page between to y-coordinates that belongs to the same task."""
+    page: fitz.Page
+    rect: fitz.Rect
+
+    __slots__ = ("page", "rect")
+
+    @staticmethod
+    def from_y_offsets(page, y0, y1) -> TaskPart:
+        """Construct a new part from two y offsets specifying lower and upper bounds of a task part."""
+        part = TaskPart()
+        part.page = page
+        part.rect = fitz.Rect(page.rect[0], y0, page.rect[2], y1)
+        return part
+
+    @staticmethod
+    def split_page(page, block_re):
+        """Split a page into tasks by splitting at text blocks matching the given regex."""
+        blocks = sorted([b for b in page.get_text_blocks() if block_re.match(b[4])], key=lambda b: b[1])
+        prev = page.rect[1]
+        for b in blocks:
+            margin = 0.2 * abs(b[3] - b[1])
+            upper = max(b[1] - margin, page.rect[1])
+            yield TaskPart.from_y_offsets(page, prev, upper)
+            prev = upper
+
+        yield TaskPart.from_y_offsets(page, prev, page.rect[3])
+
+    def cropped(self) -> Optional[TaskPart]:
+        """Return a task part cropped to fit the text blocks, or None if that would leave the part empty."""
         blocks = []
         last_y = None
-        for block in sorted(page.get_text('blocks', clip=r), key=lambda block: block[1]):
-            if last_y and (block[1] - last_y) / h > 0.05 and PAGE_NUMBER_REGEX.match(block[4]):
+        for block in sorted(self.page.get_text('blocks', clip=self.rect), key=lambda block: block[1]):
+            if last_y and (block[1] - last_y) / self.page.rect.height > 0.05 and PAGE_NUMBER_REGEX.match(block[4]):
                 continue
             if not block[4]:
                 continue
@@ -36,26 +51,64 @@ def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False)
             blocks.append(block)
 
         if sum(len(b[4]) for b in blocks) < 10:
-            continue
+            return
 
-        r.y0 = blocks[0][1] - h*0.005
-        r.y1 = max(b[3] for b in blocks) + h*0.007
+        return TaskPart.from_y_offsets(
+            self.page,
+            blocks[0][1] - self.page.rect.height*0.005,
+            max(b[3] for b in blocks) + self.page.rect.height*0.007,
+        )
 
+    def source_rect(self) -> fitz.Rect:
+        return self.rect + fitz.Rect(self.page.CropBoxPosition, self.page.CropBoxPosition)
+
+
+
+def collect_tasks(doc: fitz.Document, block_re):
+    """Return tasks (list of task parts) by parsing a document.
+
+    The document is cut at text blocks matching the `block_re`.
+    """
+    tasks = []
+    for page_idx in range(doc.page_count):
+        page = doc[page_idx]
+
+        for i, part in enumerate(TaskPart.split_page(page, block_re)):
+            part = part.cropped()
+            if not part: continue
+
+            # merge into previous task if a task crosses a page boundary
+            if i == 0 and tasks:
+                tasks[-1].append(part)
+                continue
+
+            tasks.append([part])
+
+    return tasks
+
+
+def layout_tasks(result, src, tasks: Iterable[List[TaskPart]], landscape=False, grid=False):
+    """Copy each task to a new page in the `result` document."""
+    xref = 0
+    for task in tasks:
+        y_offset = 0
+        w, h = task[0].page.rect.width, task[0].page.rect.height
         if landscape:
             w, h = h, w
-
         new_page = result.new_page(-1, w, h)
-        r += fitz.Rect(page.CropBoxPosition, page.CropBoxPosition)
+        for part in task:
+            r = part.source_rect()
+            shift = w/2 - r.width/2
 
-        shift = w/2 - r.width/2
-        xref = new_page.showPDFpage((shift, 0, shift + r.width, r.height), src, page.number, clip=r, reuse_ref=xref)
+            xref = new_page.showPDFpage((shift, y_offset, shift + r.width, y_offset + r.height), src, part.page.number, clip=r, reuse_ref=xref)
+            y_offset += r.height + 0.007 * part.page.rect.height
 
         line_offset = 0.01 * h
 
         if grid:
-            cell_size = page.rect.width / 40
+            cell_size = task[0].page.rect.width / 40
             opacity = 0.3
-            start = r.height + line_offset
+            start = y_offset + line_offset
             base = start
             while base <= h:
                 new_page.draw_line((0, base), (w, base), stroke_opacity=opacity)
@@ -67,6 +120,7 @@ def split_at_block(result, src, page_idx, block_re, landscape=False, grid=False)
             new_page.draw_line((base,  start), (base, h), stroke_opacity=opacity)
 
 
+BLOCK_REGEX = re.compile("^Exercise [0-9]+\n$|^Aufgabe [0-9]+\n$")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("src", metavar="INPUT")
@@ -76,9 +130,10 @@ def main():
     args = parser.parse_args()
 
     p = fitz.Document(args.src)
+    tasks = collect_tasks(p, BLOCK_REGEX)
+
     result = fitz.Document()
-    for i in range(p.page_count):
-        split_at_block(result, p, i, FMT_REGEX, landscape=args.landscape, grid=args.grid)
+    layout_tasks(result, p, tasks, landscape=args.landscape, grid=args.grid)
     result.save(args.dst, garbage=4)
 
 if __name__ == '__main__':
