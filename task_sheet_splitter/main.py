@@ -120,7 +120,7 @@ def layout_tasks(result, src, tasks: Iterable[List[TaskPart]], landscape=False, 
             new_page.draw_line((base,  start), (base, h), stroke_opacity=opacity)
 
 
-BLOCK_REGEX = re.compile("^Exercise [0-9]+\n$|^Aufgabe [0-9]+\n$")
+BLOCK_REGEX = re.compile("^(Exercise|Aufgabe)\s+([0-9]+.?)+\s*:?\s*\n")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("src", metavar="INPUT")
