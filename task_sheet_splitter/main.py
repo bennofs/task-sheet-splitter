@@ -32,9 +32,9 @@ class TaskPart:
         prev = page.rect[1]
         for b in blocks:
             margin = 0.2 * abs(b[3] - b[1])
-            upper = max(b[1] - margin, page.rect[1])
+            upper = max(b[1], page.rect[1])
             yield TaskPart.from_y_offsets(page, prev, upper)
-            prev = upper
+            prev = max(upper - margin, page.rect[1])
 
         yield TaskPart.from_y_offsets(page, prev, page.rect[3])
 
@@ -120,7 +120,7 @@ def layout_tasks(result, src, tasks: Iterable[List[TaskPart]], landscape=False, 
             new_page.draw_line((base,  start), (base, h), stroke_opacity=opacity)
 
 
-BLOCK_REGEX = re.compile("^(Exercise|Aufgabe)\s+([0-9]+.?)+\s*:?\s*\n")
+BLOCK_REGEX = re.compile("^(Exercise|Aufgabe)\s+([0-9]+.?)+\s*(\([^)]*\))?:?\s*\n")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("src", metavar="INPUT")
